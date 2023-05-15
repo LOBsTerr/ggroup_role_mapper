@@ -6,8 +6,8 @@ use Drupal\Core\Cache\Cache;
 use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\ggroup\Graph\GroupGraphStorageInterface;
-use Drupal\ggroup\Plugin\GroupContentEnabler\Subgroup;
-use Drupal\group\Entity\GroupContentType;
+use Drupal\ggroup\Plugin\Group\Relation\Subgroup;
+use Drupal\group\Entity\GroupRelationshipType;
 
 /**
  * Provides all direct and indirect group relations and the inherited roles.
@@ -50,7 +50,7 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
   protected $subgroupConfig = [];
 
   /**
-   * Static cache of all group content types for subgroup group content.
+   * Static cache of all group relationship types for subgroup group relationship.
    *
    * This nested array is keyed by subgroup ID and group ID.
    *
@@ -95,16 +95,16 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
 
     $cache_tags = ["group:$group_id"];
     $group_type = $group->getGroupType();
-    // Add group content types to cache tags.
-    $plugins = $group_type->getInstalledContentPlugins();
+    // Add group relationship types to cache tags.
+    $plugins = $group_type->getInstalledPlugins();
     foreach ($plugins as $plugin) {
       if ($plugin instanceof Subgroup) {
-        $group_content_types = GroupContentType::loadByContentPluginId($plugin->getPluginId());
-        foreach ($group_content_types as $group_content_type) {
-          $cache_tags[] = "config:group.content_type.{$group_content_type->id()}";
+        $group_relationship_types = GroupRelationshipType::loadByPluginId($plugin->getPluginId());
+        foreach ($group_relationship_types as $group_relationship_type) {
+          $cache_tags[] = "config:group.relationship_type.{$group_relationship_type->id()}";
         }
         // Add a tag to invalidate cache when hierarchy changes.
-        $cache_tags[] = "group_content_list:{$group_type->id()}-subgroup-{$plugin->getPluginDefinition()['entity_bundle']}";
+        $cache_tags[] = "group_relationship_list:{$group_type->id()}-subgroup-{$plugin->getPluginDefinition()['entity_bundle']}";
       }
     }
 
@@ -234,14 +234,14 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     // relations since having separate queries for every relation has a big
     // impact on performance.
     if (!$this->subgroupConfig) {
-      /** @var \Drupal\group\Entity\Storage\GroupContentTypeStorageInterface $group_content_type_storage */
-      $group_content_type_storage = $this->entityTypeManager->getStorage('group_content_type');
+      /** @var \Drupal\group\Entity\Storage\GroupRelationshipTypeStorageInterface $group_relationship_type_storage */
+      $group_relationship_type_storage = $this->entityTypeManager->getStorage('group_relationship_type');
       foreach ($this->entityTypeManager->getStorage('group_type')->loadMultiple() as $group_type) {
         $plugin_id = 'ggroup:' . $group_type->id();
-        $subgroup_content_types = $group_content_type_storage->loadByContentPluginId($plugin_id);
-        foreach ($subgroup_content_types as $subgroup_content_type) {
-          /** @var \Drupal\group\Entity\GroupContentTypeInterface $subgroup_content_type */
-          $this->subgroupConfig[$subgroup_content_type->id()] = $subgroup_content_type->getContentPlugin()->getConfiguration();
+        $subgroup_relationship_types = $group_relationship_type_storage->loadByPluginId($plugin_id);
+        foreach ($subgroup_relationship_types as $subgroup_relationship_type) {
+          /** @var \Drupal\group\Entity\GroupRelationshipTypeInterface $subgroup_relationship_type */
+          $this->subgroupConfig[$subgroup_relationship_type->id()] = $subgroup_relationship_type->getPlugin()->getConfiguration();
         }
       }
     }
@@ -267,13 +267,13 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     // each relation independently has a big impact on performance.
     if (!$this->subgroupRelations || empty($this->subgroupRelations[$group_id])) {
       // Get all type between the supergroup and subgroup.
-      $group_contents = $this->entityTypeManager->getStorage('group_content')
+      $group_relationships = $this->entityTypeManager->getStorage('group_relationship')
         ->loadByProperties([
           'type' => array_keys($subgroup_relations_config),
           'gid' => [$group_id],
         ]);
-      foreach ($group_contents as $group_content) {
-        $this->subgroupRelations[$group_content->gid->target_id][$group_content->entity_id->target_id] = $group_content->bundle();
+      foreach ($group_relationships as $group_relationship) {
+        $this->subgroupRelations[$group_relationship->gid->target_id][$group_relationship->entity_id->target_id] = $group_relationship->bundle();
       }
     }
 

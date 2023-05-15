@@ -2,6 +2,8 @@
 
 namespace Drupal\ggroup_role_mapper;
 
+use Drupal\group\Entity\GroupInterface;
+
 /**
  * An interface for the group role inheritance manager.
  */
@@ -20,11 +22,14 @@ interface GroupRoleInheritanceInterface {
    * path between all groups. The result contains all inherited roles between
    * all groups.
    *
+   * @param \Drupal\group\Entity\GroupInterface $group
+   *   Group.
+   *
    * @return array
    *   A nested array with all inherited roles for all direct/indirect group
    *   relations. The array is in the form of:
    *   $map[$group_a_id][$group_b_id][$group_b_role_id] = $group_a_role_id;
    */
-  public function getAllInheritedGroupRoleIds($group);
+  public function getAllInheritedGroupRoleIds(GroupInterface $group);
 
 }
