@@ -1,0 +1,9 @@
+services:
+  ggroup_role_mapper.group_role_inheritance:
+    class: Drupal\ggroup_role_mapper\GroupRoleInheritance
+    arguments: ['@ggroup.group_graph_storage', '@entity_type.manager', '@cache.default']
+  ggroup_role_mapper.inherit_calculator:
+    class: 'Drupal\ggroup_role_mapper\Access\InheritGroupPermissionCalculator'
+    arguments: ['@entity_type.manager', '@ggroup.group_hierarchy_manager', '@group.membership_loader', '@ggroup_role_mapper.group_role_inheritance']
+    tags:
+      - { name: group_permission_calculator, priority: -110 }

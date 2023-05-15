@@ -1,0 +1,111 @@
+<?php
+
+/**
+ * @file
+ * Enables Subgroup role mapper functionality.
+ */
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\group\Entity\GroupType;
+
+/**
+ * Implements hook_form_alter().
+ */
+function ggroup_role_mapper_form_group_content_type_add_form_alter (
+  &$form,
+  FormStateInterface $form_state,
+  $form_id
+) {
+  $route_matcher = \Drupal::service('current_route_match');
+  $group_type_id = $route_matcher->getParameter('group_type');
+  $plugin_id = $route_matcher->getParameter('plugin_id');
+  if (strpos($plugin_id, 'subgroup:') === FALSE) {
+    return;
+  }
+  $subgroup_type_id = str_replace('subgroup:', '', $plugin_id);
+
+  _ggroup_role_mapper_mapping_form($form, $plugin_id, $group_type_id, $subgroup_type_id);
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function ggroup_role_mapper_form_group_content_type_edit_form_alter (
+  &$form,
+  \Drupal\Core\Form\FormStateInterface $form_state,
+  $form_id
+) {
+  $route_matcher = \Drupal::service('current_route_match');
+  $group_content_type = $route_matcher->getParameter('group_content_type');
+  $group_type_id = $group_content_type->getGroupTypeId();
+  $subgroup_type_id = $group_content_type->getContentPlugin()->getEntityBundle();
+  $plugin_id = $group_content_type->getContentPluginId();
+  if (strpos($plugin_id, 'subgroup:') === FALSE) {
+    return;
+  }
+  _ggroup_role_mapper_mapping_form($form, $plugin_id, $group_type_id, $subgroup_type_id);
+}
+
+/**
+ * Adds mapping settings between parent and subgroups.
+ *
+ * @param array $form
+ *   Form array.
+ * @param string $plugin_id
+ *   Plugin ID.
+ * @param string $group_type_id
+ *   Group type id.
+ * @param $subgroup_type_id
+ *   Group type id.
+ */
+function _ggroup_role_mapper_mapping_form(&$form, $plugin_id, $group_type_id, $subgroup_type_id) {
+
+  // We handle only subgroup plugins.
+  $group_type = GroupType::load($group_type_id);
+  $sub_group_type = GroupType::load($subgroup_type_id);
+  $collection = \Drupal::service('plugin.manager.group_content_enabler')->getInstalled($group_type);
+  $configuration = $collection->getConfiguration();
+
+  // We create form field to map parent roles to child roles, and map child
+  // roles to parent roles. This allows for permissions/membership to
+  // propogate up/down.
+  $parent_roles = $group_type->getRoles();
+  $parent_options = [];
+  foreach ($parent_roles as $role_id => $role) {
+    $parent_options[$role_id] = $role->label();
+  }
+
+  $child_roles = $sub_group_type->getRoles();
+  $child_options = [];
+  foreach ($child_roles as $role_id => $role) {
+    $child_options[$role_id] = $role->label();
+  }
+
+  $form['parent_role_mapping'] = [
+    '#type' => 'fieldset',
+    '#title' => t('Map group roles to subgroup roles to allow group membership and permissions to be inherited by the subgroup.'),
+    '#tree' => TRUE,
+  ];
+  foreach ($parent_options as $role_id => $role_name) {
+    $form['parent_role_mapping'][$role_id] = [
+      '#type' => 'select',
+      '#title' => $role_name,
+      '#options' => $child_options,
+      '#empty_option' => t('- None -'),
+      '#default_value' => $configuration[$plugin_id]['parent_role_mapping'][$role_id] ?? NULL,
+    ];
+  }
+  $form['child_role_mapping'] = [
+    '#type' => 'fieldset',
+    '#title' => t('Map subgroup roles to group roles to allow subgroup membership and permissions to be propogated to the group.'),
+    '#tree' => TRUE,
+  ];
+  foreach ($child_options as $role_id => $role_name) {
+    $form['child_role_mapping'][$role_id] = [
+      '#type' => 'select',
+      '#title' => $role_name,
+      '#options' => $parent_options,
+      '#empty_option' => t('- None -'),
+      '#default_value' => $configuration[$plugin_id]['child_role_mapping'][$role_id] ?? NULL,
+    ];
+  }
+}

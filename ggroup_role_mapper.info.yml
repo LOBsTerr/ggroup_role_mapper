@@ -1,0 +1,7 @@
+name: 'Subgroup role mapper'
+description: 'Allows map roles between parent groups and subgroups'
+package: 'Group'
+type: 'module'
+core_version_requirement: ^8 || ^9
+dependencies:
+  - 'ggroup'
