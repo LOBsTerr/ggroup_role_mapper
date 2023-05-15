@@ -5,7 +5,7 @@ namespace Drupal\ggroup_role_mapper\Access;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\ggroup\GroupHierarchyManager;
-use Drupal\ggroup\Plugin\GroupContentEnabler\Subgroup;
+use Drupal\ggroup\Plugin\Group\Relation\Subgroup;
 use Drupal\group\Access\GroupPermissionCalculatorBase;
 use Drupal\group\Access\RefinableCalculatedGroupPermissions;
 use Drupal\group\Access\CalculatedGroupPermissionsItem;
@@ -154,7 +154,7 @@ class InheritGroupPermissionCalculator extends GroupPermissionCalculatorBase {
     $calculated_permissions = new RefinableCalculatedGroupPermissions();
     // The member permissions need to be recalculated whenever the user is added
     // to or removed from a group.
-    $calculated_permissions->addCacheTags(['group_content_list:plugin:group_membership:entity:' . $account->id()]);
+    $calculated_permissions->addCacheTags(['group_relationship_list:plugin:group_membership:entity:' . $account->id()]);
     $calculated_permissions->addCacheContexts(['user']);
 
     $calculated_permissions->addCacheableDependency($this->entityTypeManager->getStorage('user')->load($account->id()));
@@ -167,11 +167,11 @@ class InheritGroupPermissionCalculator extends GroupPermissionCalculatorBase {
       // Flag the already processed group types, so we don't process them twice.
       if (!isset($group_types_processed[$group_type->id()])) {
         $group_types_processed[$group_type->id()] = TRUE;
-        $content_plugins = $group_type->getInstalledContentPlugins();
+        $relationship_plugins = $group_type->getInstalledPlugins();
 
-        foreach ($content_plugins as $content_plugin) {
-          if ($content_plugin instanceof Subgroup) {
-            $group_type_cache_tags[] = 'group_content_list:' . $group_type->id() . '-subgroup-' . $content_plugin->getPluginDefinition()['entity_bundle'];
+        foreach ($relationship_plugins as $relationship_plugin) {
+          if ($relationship_plugin instanceof Subgroup) {
+            $group_type_cache_tags[] = 'group_relationship_list:' . $group_type->id() . '-subgroup-' . $relationship_plugin->getPluginDefinition()['entity_bundle'];
           }
         }
       }
@@ -259,7 +259,7 @@ class InheritGroupPermissionCalculator extends GroupPermissionCalculatorBase {
 
     $mapped_role_ids = [[]];
     foreach ($this->loadMembership($account) as $membership) {
-      $membership_group = $membership->getGroupContent()->getGroup();
+      $membership_group = $membership->getGroupRelationship()->getGroup();
       $membership_group_id = $membership_group->id();
       $role_mapping = [];
 
@@ -295,6 +295,7 @@ class InheritGroupPermissionCalculator extends GroupPermissionCalculatorBase {
     $group_type_id = $group_type->id();
     if (!isset($this->groupTypeOutsiderRoles[$group_type_id])) {
       $outsider_roles = $this->groupRoleStorage->loadSynchronizedByGroupTypes([$group_type_id]);
+      // @todo rewrite getOutsiderRoleId and getOutsiderRole.
       $outsider_roles[$group_type->getOutsiderRoleId()] = $group_type->getOutsiderRole();
       $this->groupTypeOutsiderRoles[$group_type_id] = $outsider_roles;
     }
@@ -314,6 +315,7 @@ class InheritGroupPermissionCalculator extends GroupPermissionCalculatorBase {
     foreach ($groups as $group_item) {
       $group_item_gid = $group_item->id();
       $role_mapping = [];
+      // @todo replace getAnonymousRoleId.
       $group_item_anonymous_role_id = $group_item->getGroupType()->getAnonymousRoleId();
       $anonymous_role = [$group_item_anonymous_role_id => $group_item_anonymous_role_id];
 
