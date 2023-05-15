@@ -237,7 +237,7 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
       /** @var \Drupal\group\Entity\Storage\GroupContentTypeStorageInterface $group_content_type_storage */
       $group_content_type_storage = $this->entityTypeManager->getStorage('group_content_type');
       foreach ($this->entityTypeManager->getStorage('group_type')->loadMultiple() as $group_type) {
-        $plugin_id = 'subgroup:' . $group_type->id();
+        $plugin_id = 'ggroup:' . $group_type->id();
         $subgroup_content_types = $group_content_type_storage->loadByContentPluginId($plugin_id);
         foreach ($subgroup_content_types as $subgroup_content_type) {
           /** @var \Drupal\group\Entity\GroupContentTypeInterface $subgroup_content_type */

@@ -18,10 +18,10 @@ function ggroup_role_mapper_form_group_content_type_add_form_alter (
   $route_matcher = \Drupal::service('current_route_match');
   $group_type_id = $route_matcher->getParameter('group_type');
   $plugin_id = $route_matcher->getParameter('plugin_id');
-  if (strpos($plugin_id, 'subgroup:') === FALSE) {
+  if (strpos($plugin_id, 'ggroup:') === FALSE) {
     return;
   }
-  $subgroup_type_id = str_replace('subgroup:', '', $plugin_id);
+  $subgroup_type_id = str_replace('ggroup:', '', $plugin_id);
 
   _ggroup_role_mapper_mapping_form($form, $plugin_id, $group_type_id, $subgroup_type_id);
 }
@@ -36,12 +36,12 @@ function ggroup_role_mapper_form_group_content_type_edit_form_alter (
 ) {
   $route_matcher = \Drupal::service('current_route_match');
   $group_content_type = $route_matcher->getParameter('group_content_type');
-  $group_type_id = $group_content_type->getGroupTypeId();
-  $subgroup_type_id = $group_content_type->getContentPlugin()->getEntityBundle();
   $plugin_id = $group_content_type->getContentPluginId();
-  if (strpos($plugin_id, 'subgroup:') === FALSE) {
+  if (strpos($plugin_id, 'ggroup:') === FALSE) {
     return;
   }
+  $group_type_id = $group_content_type->getGroupTypeId();
+  $subgroup_type_id = $group_content_type->getContentPlugin()->getEntityBundle();
   _ggroup_role_mapper_mapping_form($form, $plugin_id, $group_type_id, $subgroup_type_id);
 }
 
