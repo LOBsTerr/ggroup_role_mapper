@@ -40,7 +40,7 @@ function ggroup_role_mapper_form_group_relationship_type_edit_form_alter (
     return;
   }
   $group_type_id = $group_relationship_type->getGroupTypeId();
-  $subgroup_type_id = $group_relationship_type->getPlugin()->getEntityBundle();
+  $subgroup_type_id = $group_relationship_type->getPlugin()->getRelationType()->getEntityBundle();
   _ggroup_role_mapper_mapping_form($form, $plugin_id, $group_type_id, $subgroup_type_id);
 }
 
@@ -61,7 +61,7 @@ function _ggroup_role_mapper_mapping_form(&$form, $plugin_id, $group_type_id, $s
   // We handle only subgroup plugins.
   $group_type = GroupType::load($group_type_id);
   $sub_group_type = GroupType::load($subgroup_type_id);
-  $collection = \Drupal::service('group_relation_type.manage')->getInstalled($group_type);
+  $collection = \Drupal::service('group_relation_type.manager')->getInstalled($group_type);
   $configuration = $collection->getConfiguration();
 
   // We create form field to map parent roles to child roles, and map child
@@ -108,3 +108,4 @@ function _ggroup_role_mapper_mapping_form(&$form, $plugin_id, $group_type_id, $s
     ];
   }
 }
+
