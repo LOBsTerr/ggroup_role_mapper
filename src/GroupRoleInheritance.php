@@ -7,7 +7,6 @@ use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\ggroup\Graph\GroupGraphStorageInterface;
 use Drupal\ggroup\Plugin\Group\Relation\Subgroup;
-use Drupal\group\Entity\GroupRelationshipType;
 
 /**
  * Provides all direct and indirect group relations and the inherited roles.
@@ -50,13 +49,79 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
   protected $subgroupConfig = [];
 
   /**
-   * Static cache of all group relationship types for subgroup group relationship.
+   * Static cache for group types.
+   *
+   * @var array
+   */
+  protected $groupTypes = [];
+
+  /**
+   * Static cache for all outsider roles of group type.
+   *
+   * A nested array with all outsider roles keyed by group type ID and role ID.
+   *
+   * @var array
+   */
+  protected $groupTypeRoles = [];
+
+  /**
+   * Static cache for all outsider roles of group type.
+   *
+   * @var array
+   */
+  protected $groupTypeOutsiderRoles = [];
+
+  /**
+   * Static cache for all anonymous roles of group type.
+   *
+   * @var array
+   */
+  protected $groupTypeAnonymousRoles = [];
+
+  /**
+   * Static cache for all member roles of group type.
+   *
+   * @var array
+   */
+  protected $groupTypeMemberRoles = [];
+
+  /**
+   * Static cache tags for group type.
+   *
+   * @var array
+   */
+  protected $groupTypeCacheTags = [];
+
+  /**
+   * Static cache of all group relationship types for subgroup group
+   * relationship.
    *
    * This nested array is keyed by subgroup ID and group ID.
    *
    * @var string[][]
    */
   protected $subgroupRelations = [];
+
+  /**
+   * Group relation type storage.
+   *
+   * @var \Drupal\group\Entity\Storage\GroupRelationshipTypeStorageInterface
+   */
+  protected $groupRelationshipTypeStorage = NULL;
+
+  /**
+   * Group type storage.
+   *
+   * @var \Drupal\group\Entity\Storage\GroupTypeStorageInterface
+   */
+  protected $groupTypeStorage = NULL;
+
+  /**
+   * Group role storage.
+   *
+   * @var \Drupal\group\Entity\Storage\GroupRoleStorageInterface
+   */
+  protected $groupRoleStorage = NULL;
 
   /**
    * Constructs a new GroupHierarchyManager.
@@ -71,14 +136,19 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
   public function __construct(GroupGraphStorageInterface $group_graph_storage, EntityTypeManagerInterface $entity_type_manager, CacheBackendInterface $cache) {
     $this->groupGraphStorage = $group_graph_storage;
     $this->entityTypeManager = $entity_type_manager;
+    $this->groupTypeStorage = $entity_type_manager->getStorage('group_type');
+    $this->groupRoleStorage = $entity_type_manager->getStorage('group_role');
+    $this->groupRelationshipTypeStorage = $entity_type_manager->getStorage('group_relationship_type');
     $this->cache = $cache;
+
+    // Preload group types.
+    $this->getGroupTypes();
   }
 
   /**
    * {@inheritdoc}
    */
-  public function getAllInheritedGroupRoleIds($group) {
-    $group_id = $group->id();
+  public function getAllInheritedGroupRoleIds($group_id, $group_type_id) {
     if (!empty($this->roleMap[$group_id])) {
       return $this->roleMap[$group_id];
     }
@@ -93,20 +163,8 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
 
     $this->roleMap[$group_id] = $this->build($group_id);
 
-    $cache_tags = ["group:$group_id"];
-    $group_type = $group->getGroupType();
-    // Add group relationship types to cache tags.
-    $plugins = $group_type->getInstalledPlugins();
-    foreach ($plugins as $plugin) {
-      if ($plugin instanceof Subgroup) {
-        $group_relationship_types = GroupRelationshipType::loadByPluginId($plugin->getPluginId());
-        foreach ($group_relationship_types as $group_relationship_type) {
-          $cache_tags[] = "config:group.relationship_type.{$group_relationship_type->id()}";
-        }
-        // Add a tag to invalidate cache when hierarchy changes.
-        $cache_tags[] = "group_relationship_list:{$group_type->id()}-subgroup-{$plugin->getPluginDefinition()['entity_bundle']}";
-      }
-    }
+    $cache_tags = $this->getGroupTypeCacheTags($group_type_id);
+    $cache_tags[] = "group:$group_id";
 
     $this->cache->set($cid, $this->roleMap[$group_id], Cache::PERMANENT, $cache_tags);
 
@@ -234,14 +292,14 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     // relations since having separate queries for every relation has a big
     // impact on performance.
     if (!$this->subgroupConfig) {
-      /** @var \Drupal\group\Entity\Storage\GroupRelationshipTypeStorageInterface $group_relationship_type_storage */
-      $group_relationship_type_storage = $this->entityTypeManager->getStorage('group_relationship_type');
-      foreach ($this->entityTypeManager->getStorage('group_type')->loadMultiple() as $group_type) {
+      $group_types = $this->getGroupTypes();
+      foreach ($group_types as $group_type) {
         $plugin_id = 'ggroup:' . $group_type->id();
-        $subgroup_relationship_types = $group_relationship_type_storage->loadByPluginId($plugin_id);
+        $subgroup_relationship_types = $this->groupRelationshipTypeStorage->loadByPluginId($plugin_id);
         foreach ($subgroup_relationship_types as $subgroup_relationship_type) {
           /** @var \Drupal\group\Entity\GroupRelationshipTypeInterface $subgroup_relationship_type */
-          $this->subgroupConfig[$subgroup_relationship_type->id()] = $subgroup_relationship_type->getPlugin()->getConfiguration();
+          $this->subgroupConfig[$subgroup_relationship_type->id()] = $subgroup_relationship_type->getPlugin()
+            ->getConfiguration();
         }
       }
     }
@@ -279,6 +337,97 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
 
     $type = isset($this->subgroupRelations[$group_id][$subgroup_id]) ? $this->subgroupRelations[$group_id][$subgroup_id] : NULL;
     return isset($subgroup_relations_config[$type]) ? $subgroup_relations_config[$type] : NULL;
+  }
+
+  public function getOutsiderRoles($group_type_id) {
+    return $this->groupTypeOutsiderRoles[$group_type_id] ?? [];
+  }
+
+  public function getMemberRoles($group_type_id) {
+    return $this->groupTypeMemberRoles[$group_type_id] ?? [];
+  }
+
+  public function getAnonymousRoles($group_type_id) {
+    return $this->groupTypeAnonymousRoles[$group_type_id] ?? [];
+  }
+
+  public function getGroupType($group_type_id) {
+    if (isset($this->groupTypes[$group_type_id])) {
+      $group_type = $this->groupTypeStorage->load($group_type_id);
+      $this->groupTypes[$group_type_id] = $group_type;
+
+      $this->getGroupTypeRoles($group_type);
+      $this->addGroupTypeTags($group_type);
+    }
+
+    return $this->groupTypes[$group_type_id];
+  }
+
+  protected function getGroupTypes() {
+    if (!empty($this->groupTypes)) {
+      return $this->groupTypes;
+    }
+
+    $group_types = $this->groupTypeStorage->loadMultiple();
+    foreach ($group_types as $group_type) {
+      $this->groupTypes[$group_type->id()] = $group_type;
+      $this->getGroupTypeRoles($group_type);
+      $this->addGroupTypeTags($group_type);
+    }
+
+    return $this->groupTypes;
+
+  }
+
+  public function getGroupTypeCacheTags($group_type_id) {
+    return $this->groupTypeCacheTags[$group_type_id] ?? [];
+  }
+
+  protected function addGroupTypeTags($group_type) {
+    $cache_tags = [];
+    $group_type_id = $group_type->id();
+    $plugins = $group_type->getInstalledPlugins();
+    foreach ($plugins as $plugin) {
+      if ($plugin instanceof Subgroup) {
+        $relation_type_id = $this->groupRelationshipTypeStorage->getRelationshipTypeId($group_type_id, $plugin->getPluginId());
+        $cache_tags[] = "config:group.relationship_type.$relation_type_id";
+        $cache_tags[] = "group_relationship_list:$relation_type_id";
+      }
+    }
+
+    $this->groupTypeCacheTags[$group_type_id] = $cache_tags;
+  }
+
+  protected function getGroupTypeRoles($group_type) {
+    $group_type_id = $group_type->id();
+    // We store also staticly all roles, because we need them anyway.
+    foreach ($group_type->getRoles() as $id => $role) {
+      $this->groupTypeRoles[$id] = $role;
+      if ($role->isAnonymous()) {
+        $this->groupTypeAnonymousRoles[$group_type_id][$id] = $role;
+      }
+
+      if ($role->isOutsider()) {
+        $this->groupTypeOutsiderRoles[$group_type_id][$id] = $role;
+      }
+
+      if ($role->isMember()) {
+        $this->groupTypeMemberRoles[$group_type_id][$id] = $role;
+      }
+    }
+  }
+
+  public function getRoles(array $roles_id = []) {
+    $roles = [];
+    foreach ($roles_id as $role_id) {
+      if (!isset($this->groupTypeRoles[$role_id])) {
+        $this->groupTypeRoles[$role_id] = $this->groupRoleStorage->load($role_id);
+      }
+
+      $roles[$role_id] = $this->groupTypeRoles[$role_id];
+
+    }
+    return $roles;
   }
 
 }
