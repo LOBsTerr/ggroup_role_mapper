@@ -144,7 +144,7 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
 
       $group_ids = $this->hierarchyManager->getGroupSupergroupIds($group_id) + $this->hierarchyManager->getGroupSubgroupIds($group_id);
 
-      $group_mapping = $this->getInheritedGroupRoleIds($account_id, $group_id, $group_type_id, $group_ids, $roles);
+      $group_mapping = $this->getInheritedGroupRoleIds($account_id, $group_id, $group_type_id, $group_ids, array_flip(array_keys($roles)));
       $this->addInheritedPermissions($calculated_permissions, $group_mapping);
     }
 
@@ -156,7 +156,7 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
     return $calculated_permissions;
   }
 
-  public function calculateNonMemberPermissions($calculated_permissions, $account, $is_member = false) {
+  public function calculateNonMemberPermissions($calculated_permissions, $account) {
     // Anonymous user doesn't have id, but we want to cache it.
     $account_id = $account->isAnonymous() ? 0 : $account->id();
     $calculated_permissions->addCacheContexts(['user']);
@@ -247,16 +247,27 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
     $role_map = $this->groupRoleInheritanceManager->getAllInheritedGroupRoleIds($group_id, $group_type_id);
     $mapped_role_ids = [[]];
     foreach ($groups as $group_item_gid) {
-      if (!empty($role_map[$group_id][$group_item_gid])) {
-        $role_mapping = array_intersect_key($role_map[$group_id][$group_item_gid], $roles);
+      if (!empty($role_map[$group_item_gid][$group_id])) {
+        $role_mapping = array_intersect_key($role_map[$group_item_gid][$group_id], $roles);
+        if (empty($role_mapping)) {
+          continue;
+        }
+        if (isset($this->mappedRoles[$account_id][$group_item_gid])) {
+          $this->mappedRoles[$account_id][$group_item_gid] = array_merge($this->mappedRoles[$account_id][$group_item_gid], $this->groupRoleInheritanceManager->getRoles($role_mapping));
+        }
+        else {
+          $this->mappedRoles[$account_id][$group_item_gid] = $this->groupRoleInheritanceManager->getRoles($role_mapping);
+        }
+
       }
 
-      $mapped_role_ids[] = $role_mapping;
+//      $mapped_role_ids[] = $role_mapping;
+//      $this->mappedRoles[$account_id][$group_id] = $this->groupRoleInheritanceManager->getRoles($mapped_role_ids);
     }
+//
+//    $mapped_role_ids = array_replace_recursive(...$mapped_role_ids);
 
-    $mapped_role_ids = array_replace_recursive(...$mapped_role_ids);
 
-    $this->mappedRoles[$account_id][$group_id] = $this->groupRoleInheritanceManager->getRoles(array_unique($mapped_role_ids));
 
     return $this->getMappedRoles($account_id);
   }
