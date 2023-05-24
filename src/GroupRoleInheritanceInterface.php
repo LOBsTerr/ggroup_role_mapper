@@ -15,7 +15,7 @@ interface GroupRoleInheritanceInterface {
   const ROLE_MAP_CID = 'ggroup:role_map';
 
   /**
-   * Get all (inherited) group roles.
+   * Build group roles map.
    *
    * For all (direct/indirect) relations between groups, we check if there are
    * roles we should map. We map the roles up/down for each relation in the full
@@ -32,6 +32,6 @@ interface GroupRoleInheritanceInterface {
    *   relations. The array is in the form of:
    *   $map[$group_a_id][$group_b_id][$group_b_role_id] = $group_a_role_id;
    */
-  public function getAllInheritedGroupRoleIds($group_id, $group_type_id);
+  public function buildGroupRolesMap($group_id, $group_type_id);
 
 }

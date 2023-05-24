@@ -8,7 +8,6 @@ use Drupal\Core\Session\AccountInterface;
 use Drupal\flexible_permissions\CalculatedPermissionsItem;
 use Drupal\flexible_permissions\PermissionCalculatorBase;
 use Drupal\ggroup\GroupHierarchyManager;
-use Drupal\ggroup\Plugin\Group\Relation\Subgroup;
 use Drupal\group\Access\CalculatedGroupPermissionsItem;
 use Drupal\group\Access\CalculatedGroupPermissionsItemInterface;
 use Drupal\ggroup_role_mapper\GroupRoleInheritanceInterface;
@@ -72,6 +71,27 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
   protected $groups = [];
 
   /**
+   * Processed group types.
+   *
+   * @var array
+   */
+  protected $processedGroupTypes = [];
+
+  /**
+   * Account id.
+   *
+   * @var int
+   */
+  protected $accountId = 0;
+
+  /**
+   * Calculated permissions.
+   *
+   * @var \Drupal\flexible_permissions\CalculatedPermissionsInterface
+   */
+  protected $calculatedPermissions;
+
+  /**
    * Constructs a InheritGroupPermissionCalculator object.
    *
    * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
@@ -103,70 +123,84 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
    * {@inheritdoc}
    */
   public function calculatePermissions(AccountInterface $account, $scope) {
-    $calculated_permissions = parent::calculatePermissions($account, $scope);
+    $this->calculatedPermissions = parent::calculatePermissions($account, $scope);
 
+    $this->loadGroups();
+
+    // Anonymous user doesn't have id, but we want to cache it.
+    $this->accountId = $account->isAnonymous() ? 0 : $account->id();
     if ($scope == PermissionScopeInterface::INDIVIDUAL_ID) {
-      return $this->calculateMemberPermissions($calculated_permissions, $account, TRUE);
+      $this->calculateMemberPermissions();
     }
 
     if ($scope == PermissionScopeInterface::INSIDER_ID || $scope == PermissionScopeInterface::OUTSIDER_ID) {
-//      return $this->calculateNonMemberPermissions($calculated_permissions, $account);
+      $this->calculateNonMemberPermissions($account);
     }
 
-    return $calculated_permissions;
+    return $this->calculatedPermissions;
   }
 
-  public function calculateMemberPermissions($calculated_permissions, $account) {
-    $account_id = $account->id();
-
+  /**
+   * Calculate permissions for members.
+   */
+  public function calculateMemberPermissions() {
     // The member permissions need to be recalculated whenever the user is added
     // to or removed from a group.
-    $calculated_permissions->addCacheTags(['group_relationship_list:plugin:group_membership:entity:' . $account_id]);
-    $calculated_permissions->addCacheContexts(['user']);
+    $this->calculatedPermissions->addCacheTags(['group_relationship_list:plugin:group_membership:entity:' . $this->accountId]);
+    $this->calculatedPermissions->addCacheContexts(['user']);
 
-    $calculated_permissions->addCacheableDependency($this->entityTypeManager->getStorage('user')->load($account_id));
+    $user = $this->entityTypeManager->getStorage('user')->load($this->accountId);
+    $this->calculatedPermissions->addCacheableDependency($user);
 
-    $group_memberships = $this->membershipLoader->loadByUser($account);
+    // Get all memberships for the current user.
+    $group_memberships = $this->membershipLoader->loadByUser($user);
 
     $this->processedGroupTypes = [];
     foreach ($group_memberships as $group_membership) {
       $group_id = $group_membership->getGroup()->id();
       $group_type_id = $group_membership->getGroup()->getGroupType()->id();
 
+      $this->addGroupTypeTags($group_type_id);
+
       $roles = $group_membership->getRoles();
 
-      // No roles found, nothing to do here.
       if (empty($roles)) {
         continue;
       }
 
-      $this->processedGroupTypes[$group_type_id] = $group_type_id;
-
       $group_ids = $this->hierarchyManager->getGroupSupergroupIds($group_id) + $this->hierarchyManager->getGroupSubgroupIds($group_id);
 
-      $group_mapping = $this->getInheritedGroupRoleIds($account_id, $group_id, $group_type_id, $group_ids, array_flip(array_keys($roles)));
-      $this->addInheritedPermissions($calculated_permissions, $group_mapping);
+      $this->addInheritedPermissions($group_id, $group_ids, $roles);
     }
 
-    // Add cache tags according to invalidate the cache when the subgroups hierarchy changes.
-    foreach ($this->processedGroupTypes as $group_type_id) {
-      $calculated_permissions->addCacheTags($this->groupRoleInheritanceManager->getGroupTypeCacheTags($group_type_id));
-    }
-
-    return $calculated_permissions;
   }
 
-  public function calculateNonMemberPermissions($calculated_permissions, $account) {
-    // Anonymous user doesn't have id, but we want to cache it.
-    $account_id = $account->isAnonymous() ? 0 : $account->id();
-    $calculated_permissions->addCacheContexts(['user']);
+  /**
+   * Add group types tags.
+   */
+  public function addGroupTypeTags($group_type_id) {
+    // Add cache tags according to invalidate the cache when the subgroups hierarchy changes.
+    if (empty($this->processedGroupTypes[$group_type_id])) {
+      $this->calculatedPermissions->addCacheTags($this->groupRoleInheritanceManager->getGroupTypeCacheTags($group_type_id));
+      $this->processedGroupTypes[$group_type_id] = $group_type_id;
+    }
+  }
 
+  /**
+   * Calculate permissions for non members.
+   */
+  public function calculateNonMemberPermissions($account) {
+    $this->calculatedPermissions->addCacheContexts(['user']);
+
+    // We need to run through all groups for outsiders and anonymous.
     $groups = $this->loadGroups();
     $group_ids = array_keys($groups);
 
+    // Reset processed group types cache.
     $this->processedGroupTypes = [];
 
     foreach ($groups as $group_id => $group_type_id) {
+      $this->addGroupTypeTags($group_type_id);
       if ($account->isAnonymous() ) {
         $roles = $this->groupRoleInheritanceManager->getAnonymousRoles($group_type_id);
       }
@@ -179,101 +213,116 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
         continue;
       }
 
-      $this->processedGroupTypes[$group_type_id] = $group_type_id;
-
-      $group_mapping = $this->getInheritedGroupRoleIds($account_id, $group_id, $group_type_id, $group_ids, $roles);
-      $this->addInheritedPermissions($calculated_permissions, $group_mapping);
+      $this->addInheritedPermissions($group_id, $group_ids, $roles);
     }
-
-    // Add cache tags according to invalidate the cache when the subgroups hierarchy changes.
-    foreach ($this->processedGroupTypes as $group_type_id) {
-      $calculated_permissions->addCacheTags($this->groupRoleInheritanceManager->getGroupTypeCacheTags($group_type_id));
-    }
-
-    return $calculated_permissions;
   }
 
-  public function addInheritedPermissions($calculated_permissions, $group_mapping) {
-    foreach ($group_mapping as $mapped_group_id => $group_roles) {
+  /**
+   * Add inherited permissions.
+   *
+   * @param $group_id
+   *   Current group id.
+   * @param $group_ids
+   *   List of related groups.
+   * @param $roles
+   *   Roles to be checked.
+   */
+  public function addInheritedPermissions($group_id, $group_ids, $roles) {
+
+    $this->getInheritedGroupRoleIds($group_id, $group_ids, $roles);
+
+    foreach ($this->getMappedRoles() as $mapped_group_id => $group_roles) {
       if (count($group_roles) == 0) {
         continue;
       }
+
+      // @TODO maybe we should never set is_admin to true here.
       $is_admin = FALSE;
       $permission_sets = [];
       foreach ($group_roles as $group_role) {
         $permission_sets[] = $group_role->getPermissions();
-        $calculated_permissions->addCacheableDependency($group_role);
+        $this->calculatedPermissions->addCacheableDependency($group_role);
         if (!$is_admin && $group_role->isAdmin()) {
           $is_admin = TRUE;
         }
       }
+
       $permissions = $permission_sets ? array_merge(...$permission_sets) : [];
-
-      $calculated_permissions->addItem(new CalculatedPermissionsItem(
-        PermissionScopeInterface::INDIVIDUAL_ID,
-        $mapped_group_id,
-        $permissions,
-        $is_admin
-      ));
+      if (!empty($permissions)) {
+        $this->calculatedPermissions->addCacheTags(["group:$mapped_group_id"]);
+        $this->calculatedPermissions->addItem(new CalculatedPermissionsItem(
+          PermissionScopeInterface::INDIVIDUAL_ID,
+          $mapped_group_id,
+          $permissions,
+          $is_admin
+        ));
+      }
     }
-
-    return $calculated_permissions;
   }
 
   /**
    * Getter for mapped roles.
    *
-   * @param string $account_id
-   *   Account id.
    * @param string|null $group_id
    *   Group id.
    *
    * @return array
    *   Mapped roles, defaults to empty array.
    */
-  public function getMappedRoles($account_id, $group_id = NULL) {
-    if (!empty($group_id)) {
-      return $this->mappedRoles[$account_id][$group_id] ?? [];
+  public function getMappedRoles() {
+    return $this->mappedRoles[$this->accountId] ?? [];
+  }
+
+  /**
+   * Add role mappings.
+   *
+   * @param $group_id
+   *   Group id.
+   * @param $role_mapping
+   *   Array of roles mapped to group.
+   */
+  public function addMappedRoles($group_id, $role_mapping) {
+    if (empty($role_mapping)) {
+      return;
     }
-    return $this->mappedRoles[$account_id] ?? [];
+    if (isset($this->mappedRoles[$this->accountId][$group_id])) {
+      $this->mappedRoles[$this->accountId][$group_id] = array_merge($this->mappedRoles[$this->accountId][$group_id], $this->groupRoleInheritanceManager->getRoles($role_mapping));
+    }
+    else {
+      $this->mappedRoles[$this->accountId][$group_id] = $this->groupRoleInheritanceManager->getRoles($role_mapping);
+    }
   }
 
   /**
    * {@inheritdoc}
    */
-  public function getInheritedGroupRoleIds($account_id, $group_id, $group_type_id, array $groups, $roles = []) {
-    $role_mapping = [];
+  public function getInheritedGroupRoleIds($group_id, array $groups, $roles = []) {
+    // Preload current group role map.
+    $this->groupRoleInheritanceManager->buildGroupRolesMap($group_id, $this->getGroupTypeId($group_id));
 
-    $role_map = $this->groupRoleInheritanceManager->getAllInheritedGroupRoleIds($group_id, $group_type_id);
-    $mapped_role_ids = [[]];
     foreach ($groups as $group_item_gid) {
+      // Get group role map for related group.
+      $role_map = $this->groupRoleInheritanceManager->buildGroupRolesMap($group_item_gid, $this->getGroupTypeId($group_item_gid));
       if (!empty($role_map[$group_item_gid][$group_id])) {
+        // If we found mapping between to groups, we check if the mapping
+        // includes given roles.
         $role_mapping = array_intersect_key($role_map[$group_item_gid][$group_id], $roles);
-        if (empty($role_mapping)) {
-          continue;
-        }
-        if (isset($this->mappedRoles[$account_id][$group_item_gid])) {
-          $this->mappedRoles[$account_id][$group_item_gid] = array_merge($this->mappedRoles[$account_id][$group_item_gid], $this->groupRoleInheritanceManager->getRoles($role_mapping));
-        }
-        else {
-          $this->mappedRoles[$account_id][$group_item_gid] = $this->groupRoleInheritanceManager->getRoles($role_mapping);
-        }
-
+        // Store found role mapping, if any.
+        $this->addMappedRoles($group_item_gid, $role_mapping);
       }
-
-//      $mapped_role_ids[] = $role_mapping;
-//      $this->mappedRoles[$account_id][$group_id] = $this->groupRoleInheritanceManager->getRoles($mapped_role_ids);
     }
-//
-//    $mapped_role_ids = array_replace_recursive(...$mapped_role_ids);
-
-
-
-    return $this->getMappedRoles($account_id);
   }
 
+  /**
+   * Load all groups.
+   *
+   * @return array
+   *   Array of groups ids.
+   */
   protected function loadGroups() {
+    // @todo: We can try to use hard cache by adding removing using hooks.
     if (empty($this->groups)) {
+      // Load all groups using query, instead of loading all group entities.
       $this->groups = $this->database->select('groups', 'gr')
         ->fields('gr', ['id', 'type'])
         ->execute()
@@ -283,17 +332,17 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
     return $this->groups;
   }
 
-  protected function loadMembershipGroups($account_id) {
-    if (empty($this->membershipGroups)) {
-      $this->membershipGroups = $this->database->select('group_relationship_field_data', 'gr')
-        ->fields('gr', ['gid', 'group_type'])
-        ->condition('entity_id', $account_id)
-        ->condition('plugin_id', 'group_membership')
-        ->execute()
-        ->fetchAllKeyed();
-    }
-
-    return $this->membershipGroups;
+  /**
+   * Get group type id by group id.
+   *
+   * @param $group_id
+   *   Group id.
+   *
+   * @return mixed|null
+   *   Group type id.
+   */
+  protected function getGroupTypeId($group_id) {
+    return $this->groups[$group_id] ?? NULL;
   }
 
 }

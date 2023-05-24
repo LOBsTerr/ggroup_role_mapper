@@ -7,6 +7,7 @@ use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\ggroup\Graph\GroupGraphStorageInterface;
 use Drupal\ggroup\Plugin\Group\Relation\Subgroup;
+use Drupal\group\Entity\GroupTypeInterface;
 
 /**
  * Provides all direct and indirect group relations and the inherited roles.
@@ -148,7 +149,7 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
   /**
    * {@inheritdoc}
    */
-  public function getAllInheritedGroupRoleIds($group_id, $group_type_id) {
+  public function buildGroupRolesMap($group_id, $group_type_id) {
     if (!empty($this->roleMap[$group_id])) {
       return $this->roleMap[$group_id];
     }
@@ -339,18 +340,41 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     return isset($subgroup_relations_config[$type]) ? $subgroup_relations_config[$type] : NULL;
   }
 
+  /**
+   * Get outsider roles by group type id.
+   *
+   * @param string $group_type_id
+   *   Group type id.
+   *
+   * @return array
+   *   Get outsider roles.
+   */
   public function getOutsiderRoles($group_type_id) {
     return $this->groupTypeOutsiderRoles[$group_type_id] ?? [];
   }
 
-  public function getMemberRoles($group_type_id) {
-    return $this->groupTypeMemberRoles[$group_type_id] ?? [];
-  }
-
+  /**
+   * Get anonymous roles by group type id.
+   *
+   * @param string $group_type_id
+   *   Group type id.
+   *
+   * @return array
+   *   Get anonymous roles.
+   */
   public function getAnonymousRoles($group_type_id) {
     return $this->groupTypeAnonymousRoles[$group_type_id] ?? [];
   }
 
+  /**
+   * Get group type by id
+   *
+   * @param string $group_type_id
+   *   Group type id.
+   *
+   * @return \Drupal\group\Entity\GroupTypeInterface
+   *   Group type.
+   */
   public function getGroupType($group_type_id) {
     if (isset($this->groupTypes[$group_type_id])) {
       $group_type = $this->groupTypeStorage->load($group_type_id);
@@ -363,6 +387,12 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     return $this->groupTypes[$group_type_id];
   }
 
+  /**
+   * Get all group types in the system.
+   *
+   * @return array
+   *   All group types.
+   */
   protected function getGroupTypes() {
     if (!empty($this->groupTypes)) {
       return $this->groupTypes;
@@ -379,11 +409,26 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
 
   }
 
+  /**
+   * Get group type tags.
+   *
+   * @param string $group_type_id
+   *   Group type id.
+   *
+   * @return array
+   *   List of tags.
+   */
   public function getGroupTypeCacheTags($group_type_id) {
     return $this->groupTypeCacheTags[$group_type_id] ?? [];
   }
 
-  protected function addGroupTypeTags($group_type) {
+  /**
+   * Add group type tags.
+   *
+   * @param \Drupal\group\Entity\GroupTypeInterface $group_type
+   *   Group type.
+   */
+  protected function addGroupTypeTags(GroupTypeInterface $group_type) {
     $cache_tags = [];
     $group_type_id = $group_type->id();
     $plugins = $group_type->getInstalledPlugins();
@@ -398,9 +443,15 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     $this->groupTypeCacheTags[$group_type_id] = $cache_tags;
   }
 
-  protected function getGroupTypeRoles($group_type) {
+  /**
+   * Get group type roles.
+   *
+   * @param \Drupal\group\Entity\GroupTypeInterface $group_type
+   *   Group type.
+   */
+  protected function getGroupTypeRoles(GroupTypeInterface $group_type) {
     $group_type_id = $group_type->id();
-    // We store also staticly all roles, because we need them anyway.
+    // We store staticly all roles, because we need them anyway.
     foreach ($group_type->getRoles() as $id => $role) {
       $this->groupTypeRoles[$id] = $role;
       if ($role->isAnonymous()) {
@@ -417,6 +468,15 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     }
   }
 
+  /**
+   * Get roels by ids.
+   *
+   * @param array $roles_id
+   *   Roels ids.
+   *
+   * @return array
+   *   Group roles.
+   */
   public function getRoles(array $roles_id = []) {
     $roles = [];
     foreach ($roles_id as $role_id) {
