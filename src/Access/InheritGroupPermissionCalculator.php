@@ -168,11 +168,8 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
         continue;
       }
 
-      $group_ids = $this->hierarchyManager->getGroupSupergroupIds($group_id) + $this->hierarchyManager->getGroupSubgroupIds($group_id);
-
-      $this->addInheritedPermissions($group_id, $group_ids, $roles);
+      $this->addInheritedPermissions($group_id, $roles);
     }
-
   }
 
   /**
@@ -194,7 +191,6 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
 
     // We need to run through all groups for outsiders and anonymous.
     $groups = $this->loadGroups();
-    $group_ids = array_keys($groups);
 
     // Reset processed group types cache.
     $this->processedGroupTypes = [];
@@ -213,7 +209,7 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
         continue;
       }
 
-      $this->addInheritedPermissions($group_id, $group_ids, $roles);
+      $this->addInheritedPermissions($group_id, $roles);
     }
   }
 
@@ -222,26 +218,24 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
    *
    * @param $group_id
    *   Current group id.
-   * @param $group_ids
-   *   List of related groups.
    * @param $roles
    *   Roles to be checked.
    */
-  public function addInheritedPermissions($group_id, $group_ids, $roles) {
+  public function addInheritedPermissions($group_id, $roles) {
 
-    $this->getInheritedGroupRoleIds($group_id, $group_ids, $roles);
+    $this->getGroupInheritedRoles($group_id, $roles);
 
     foreach ($this->getMappedRoles() as $mapped_group_id => $group_roles) {
       if (count($group_roles) == 0) {
         continue;
       }
 
-      // @TODO maybe we should never set is_admin to true here.
       $is_admin = FALSE;
       $permission_sets = [];
       foreach ($group_roles as $group_role) {
         $permission_sets[] = $group_role->getPermissions();
         $this->calculatedPermissions->addCacheableDependency($group_role);
+        // if the mapped roles is admin we pass with permissions.
         if (!$is_admin && $group_role->isAdmin()) {
           $is_admin = TRUE;
         }
@@ -294,21 +288,24 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
   }
 
   /**
-   * {@inheritdoc}
+   * Get group inherited roles.
+   *
+   * @param int $group_id
+   *   Group od.
+   * @param array $roles
+   *   Array of roles.
    */
-  public function getInheritedGroupRoleIds($group_id, array $groups, $roles = []) {
+  public function getGroupInheritedRoles($group_id, $roles = []) {
+    if (empty($roles)) {
+      return;
+    }
     // Preload current group role map.
-    $this->groupRoleInheritanceManager->buildGroupRolesMap($group_id, $this->getGroupTypeId($group_id));
+    $role_map = $this->groupRoleInheritanceManager->buildGroupRolesMap($group_id, $this->getGroupTypeId($group_id));
 
-    foreach ($groups as $group_item_gid) {
-      // Get group role map for related group.
-      $role_map = $this->groupRoleInheritanceManager->buildGroupRolesMap($group_item_gid, $this->getGroupTypeId($group_item_gid));
-      if (!empty($role_map[$group_item_gid][$group_id])) {
-        // If we found mapping between to groups, we check if the mapping
-        // includes given roles.
-        $role_mapping = array_intersect_key($role_map[$group_item_gid][$group_id], $roles);
-        // Store found role mapping, if any.
-        $this->addMappedRoles($group_item_gid, $role_mapping);
+    foreach ($role_map as $mapped_group_id => $group_mappings) {
+      foreach ($group_mappings as $group_mapping) {
+        $role_mapping = array_intersect_key($group_mapping, $roles);
+        $this->addMappedRoles($mapped_group_id, $role_mapping);
       }
     }
   }
@@ -320,7 +317,6 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
    *   Array of groups ids.
    */
   protected function loadGroups() {
-    // @todo: We can try to use hard cache by adding removing using hooks.
     if (empty($this->groups)) {
       // Load all groups using query, instead of loading all group entities.
       $this->groups = $this->database->select('groups', 'gr')
