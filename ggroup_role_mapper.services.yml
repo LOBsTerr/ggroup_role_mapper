@@ -2,10 +2,10 @@ services:
 
   ggroup_role_mapper.group_role_inheritance:
     class: Drupal\ggroup_role_mapper\GroupRoleInheritance
-    arguments: ['@ggroup.group_graph_storage', '@entity_type.manager', '@cache.default']
+    arguments: ['@ggroup.group_graph_storage', '@entity_type.manager', '@cache.default', '@database']
 
   ggroup_role_mapper.inherit_calculator:
     class: 'Drupal\ggroup_role_mapper\Access\InheritGroupPermissionCalculator'
-    arguments: ['@entity_type.manager', '@ggroup.group_hierarchy_manager', '@group.membership_loader', '@ggroup_role_mapper.group_role_inheritance', '@database']
+    arguments: ['@entity_type.manager', '@ggroup.group_hierarchy_manager', '@group.membership_loader', '@ggroup_role_mapper.group_role_inheritance']
     tags:
       - { name: flexible_permission_calculator, priority: -110 }

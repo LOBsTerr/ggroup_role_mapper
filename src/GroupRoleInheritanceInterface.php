@@ -24,14 +24,12 @@ interface GroupRoleInheritanceInterface {
    *
    * @param int $group_id
    *   Group id.
-   * @param int $group_type_id
-   *   Group type id.
    *
    * @return array
    *   A nested array with all inherited roles for all direct/indirect group
    *   relations. The array is in the form of:
    *   $map[$group_a_id][$group_b_id][$group_b_role_id] = $group_a_role_id;
    */
-  public function buildGroupRolesMap($group_id, $group_type_id);
+  public function buildGroupRolesMap($group_id);
 
 }
