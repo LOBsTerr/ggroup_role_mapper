@@ -111,10 +111,10 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
     // Anonymous user doesn't have id, but we want to cache it.
     $this->accountId = $account->isAnonymous() ? 0 : $account->id();
     if ($scope == PermissionScopeInterface::INDIVIDUAL_ID) {
+      // We will calculated all permisions as individiual roles, so we can
+      // assign them to specific group, in other case they will be assigned to
+      // all group of specific group type.
       $this->calculateMemberPermissions();
-    }
-
-    if ($scope == PermissionScopeInterface::INSIDER_ID || $scope == PermissionScopeInterface::OUTSIDER_ID) {
       $this->calculateNonMemberPermissions($account);
     }
 
