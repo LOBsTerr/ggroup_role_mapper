@@ -151,17 +151,17 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
    * {@inheritdoc}
    */
   public function buildGroupRolesMap($group_id) {
-    if (!empty($this->roleMap[$group_id])) {
-      return $this->roleMap[$group_id];
-    }
+//    if (!empty($this->roleMap[$group_id])) {
+//      return $this->roleMap[$group_id];
+//    }
 
     $cid = GroupRoleInheritanceInterface::ROLE_MAP_CID . ':' . $group_id;
 
-    $cache = $this->cache->get($cid);
-    if ($cache && $cache->valid) {
-      $this->roleMap[$group_id] = $cache->data;
-      return $this->roleMap[$group_id];
-    }
+//    $cache = $this->cache->get($cid);
+//    if ($cache && $cache->valid) {
+//      $this->roleMap[$group_id] = $cache->data;
+//      return $this->roleMap[$group_id];
+//    }
 
     $this->roleMap[$group_id] = $this->build($group_id);
 
@@ -216,6 +216,10 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
         }
         $role_map[] = $path_role_map;
 
+        // Add all indirectly inherited group roles between groups.
+        $role_map[] = $this->mapInterGroupTypeConnections($path, $path_role_map);
+        $role_map[] = $this->mapInterGroupTypeConnections(array_reverse($path), $path_role_map);
+
         // Add all indirectly inherited subgroup roles (bottom up).
         $role_map[] = $this->mapIndirectPathRoles($path, $path_role_map);
 
@@ -225,6 +229,43 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     }
 
     return !empty($role_map) ? array_replace_recursive(...$role_map) : [];
+  }
+
+  /**
+   * Provide mapping for role connected through group types.
+   */
+  protected function mapInterGroupTypeConnections(array $path, array $path_role_map) {
+    $mapping = [];
+
+    foreach ($path as $current_group_id) {
+      if (empty($path_role_map[$current_group_id])) {
+        continue;
+      }
+
+      foreach ($path_role_map[$current_group_id] as $roles) {
+        foreach ($roles as $role => $target_role) {
+          foreach ($path as $subgroup_id) {
+            if ($subgroup_id === $current_group_id) {
+              continue;
+            }
+
+            if (empty($path_role_map[$subgroup_id])) {
+              continue;
+            }
+
+            foreach ($path_role_map[$subgroup_id] as $subgroup_roles) {
+              foreach ($subgroup_roles as $subgroup_role => $subgroup_target_role) {
+                if ($role === $subgroup_target_role) {
+                  $mapping[$subgroup_id][$current_group_id][$subgroup_role] = $target_role;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return $mapping;
   }
 
   /**
