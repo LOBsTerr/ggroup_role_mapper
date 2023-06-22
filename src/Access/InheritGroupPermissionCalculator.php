@@ -10,7 +10,6 @@ use Drupal\ggroup\GroupHierarchyManager;
 use Drupal\group\Access\CalculatedGroupPermissionsItem;
 use Drupal\group\Access\CalculatedGroupPermissionsItemInterface;
 use Drupal\ggroup_role_mapper\GroupRoleInheritanceInterface;
-use Drupal\group\GroupMembershipLoader;
 use Drupal\group\PermissionScopeInterface;
 
 /**
@@ -40,13 +39,6 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
   protected $groupRoleInheritanceManager;
 
   /**
-   * The group membership loader.
-   *
-   * @var \Drupal\group\GroupMembershipLoader
-   */
-  protected $membershipLoader;
-
-  /**
    * Static cache for all inherited group roles by user.
    *
    * A nested array with all inherited roles keyed by user ID and group ID.
@@ -70,6 +62,13 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
   protected $accountId = 0;
 
   /**
+   * Account.
+   *
+   * @var \Drupal\Core\Session\AccountInterface
+   */
+  protected $account = NULL;
+
+  /**
    * Calculated permissions.
    *
    * @var \Drupal\flexible_permissions\CalculatedPermissionsInterface
@@ -83,8 +82,6 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
    *   The entity type manager.
    * @param \Drupal\ggroup\GroupHierarchyManager $hierarchy_manager
    *   The group hierarchy manager.
-   * @param \Drupal\group\GroupMembershipLoader $membership_loader
-   *   The group membership loader.
    * @param \Drupal\ggroup_role_mapper\GroupRoleInheritanceInterface $group_role_inheritance_manager
    *   The group membership loader.
    * @param \Drupal\Core\Database\Connection $database
@@ -93,12 +90,10 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
   public function __construct(
     EntityTypeManagerInterface $entity_type_manager,
     GroupHierarchyManager $hierarchy_manager,
-    GroupMembershipLoader $membership_loader,
     GroupRoleInheritanceInterface $group_role_inheritance_manager
   ) {
     $this->entityTypeManager = $entity_type_manager;
     $this->hierarchyManager = $hierarchy_manager;
-    $this->membershipLoader = $membership_loader;
     $this->groupRoleInheritanceManager = $group_role_inheritance_manager;
   }
 
@@ -109,13 +104,14 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
     $this->calculatedPermissions = parent::calculatePermissions($account, $scope);
 
     // Anonymous user doesn't have id, but we want to cache it.
+    $this->account = $account;
     $this->accountId = $account->isAnonymous() ? 0 : $account->id();
     if ($scope == PermissionScopeInterface::INDIVIDUAL_ID) {
-      // We will calculated all permisions as individiual roles, so we can
+      // We will calculate all permisions as individual roles, so we can
       // assign them to specific group, in other case they will be assigned to
       // all group of specific group type.
       $this->calculateMemberPermissions();
-      $this->calculateNonMemberPermissions($account);
+      $this->calculateNonMemberPermissions();
     }
 
     return $this->calculatedPermissions;
@@ -134,20 +130,13 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
     $this->calculatedPermissions->addCacheableDependency($user);
 
     // Get all memberships for the current user.
-    $group_memberships = $this->membershipLoader->loadByUser($user);
+    $groups_with_memberships = array_keys($this->groupRoleInheritanceManager->getMemberships($user));
 
     $this->processedGroupTypes = [];
-    foreach ($group_memberships as $group_membership) {
-      $group_id = $group_membership->getGroup()->id();
-      $this->addGroupTypeTags($group_membership->getGroup()->getGroupType()->id());
+    foreach ($groups_with_memberships as $group_id) {
+      $this->addGroupTypeTags($this->groupRoleInheritanceManager->getGroupTypeId($group_id));
 
-      $roles = $group_membership->getRoles();
-
-      if (empty($roles)) {
-        continue;
-      }
-
-      $this->getGroupMemberInheritedRoles($group_id, $roles);
+      $this->getGroupMemberInheritedRoles($group_id);
       $this->addInheritedPermissions();
     }
   }
@@ -164,9 +153,9 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
   }
 
   /**
-   * Calculate permissions for non members.
+   * Calculate permissions for non-members.
    */
-  public function calculateNonMemberPermissions($account) {
+  public function calculateNonMemberPermissions() {
     $this->calculatedPermissions->addCacheContexts(['user']);
 
     // We need to run through all groups for outsiders and anonymous.
@@ -177,19 +166,8 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
 
     foreach ($groups as $group_id => $group_type_id) {
       $this->addGroupTypeTags($group_type_id);
-      if ($account->isAnonymous() ) {
-        $roles = $this->groupRoleInheritanceManager->getAnonymousRoles($group_type_id);
-      }
-      else {
-        $roles = $this->groupRoleInheritanceManager->getOutsiderRoles($group_type_id);
-      }
 
-      // No roles found, nothing to do here.
-      if (empty($roles)) {
-        continue;
-      }
-
-      $this->getGroupNonMembersInheritedRoles($group_id, $roles);
+      $this->getGroupNonMembersInheritedRoles($group_id);
       $this->addInheritedPermissions();
     }
   }
@@ -215,7 +193,7 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
       }
 
       $permissions = $permission_sets ? array_merge(...$permission_sets) : [];
-      if (!empty($permissions)) {
+      if ($is_admin || !empty($permissions)) {
         $this->calculatedPermissions->addCacheTags(["group:$mapped_group_id"]);
         $this->calculatedPermissions->addItem(new CalculatedPermissionsItem(
           PermissionScopeInterface::INDIVIDUAL_ID,
@@ -245,13 +223,107 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
    *
    * @param $group_id
    *   Group id.
-   * @param $role_mapping
+   * @param $mapped_roles
+   *   Array of roles mapped to group.
+   */
+  public function calculateMappedRoles($group_id, $mapped_group_id, $role_map, $direct_mapping = TRUE) {
+
+    if (!$direct_mapping) {
+      // Reverse group id, if it is reverse mapping.
+      $group_temp_id = $group_id;
+      $group_id = $mapped_group_id;
+      $mapped_group_id = $group_temp_id;
+    }
+
+    // Get group types config first to avoid any other calculations.
+    $intermediary_group = $this->groupRoleInheritanceManager->getIntermediaryGroup($group_id, $mapped_group_id);
+
+    // There is intermediary between group types, because we don't have direct connection we need to pass through all
+    if (!empty($intermediary_group)) {
+      $group_type_config = $this->groupRoleInheritanceManager->getPluginConfig($mapped_group_id, $intermediary_group);
+    }
+    else {
+      if ($direct_mapping) {
+        $group_type_config = $this->groupRoleInheritanceManager->getPluginConfig($mapped_group_id, $group_id);
+      }
+      else {
+        $group_type_config = $this->groupRoleInheritanceManager->getPluginConfig($group_id, $mapped_group_id);
+      }
+    }
+
+    if (empty($group_type_config)) {
+      return;
+    }
+
+    $mapped_roles = $role_map[$group_id][$mapped_group_id] ?? [];
+    if (empty($mapped_roles)) {
+      return;
+    }
+
+    $user_mapped_group_roles = $this->groupRoleInheritanceManager->getUserGroupRoles($this->account, $mapped_group_id);
+    if (empty($user_mapped_group_roles)) {
+      return;
+    }
+
+    $role_mapping = [];
+
+    $user_group_roles = $this->groupRoleInheritanceManager->getUserGroupRoles($this->account, $group_id);
+
+    foreach ($mapped_roles as $mapped_role => $target_role) {
+      // User doesn't have this role in the group we are mapping.
+      if (!in_array($mapped_role, $user_mapped_group_roles)) {
+        continue;
+      }
+
+      // We have connection between group types, but not config for direct
+      // connection.
+      if ($direct_mapping && empty($group_type_config['parent_role_mapping'][$mapped_role])) {
+        continue;
+      }
+
+      // We have connection between group types, but not config for reverse
+      // connection.
+      if (!$direct_mapping && empty($group_type_config['child_role_mapping'][$mapped_role])) {
+        continue;
+      }
+
+      // Get allowed roles from config.
+      if ($direct_mapping) {
+        $allowed_roles = $group_type_config['parent_target_roles'][$mapped_role] ?? [];
+      }
+      else {
+        $allowed_roles = $group_type_config['child_target_roles'][$mapped_role] ?? [];
+      }
+
+      // If there is no allowed roles, everything is allowed.
+      if (!empty($allowed_roles)) {
+        $user_allowed_roles = array_intersect($allowed_roles, $user_group_roles);
+        if (empty($user_allowed_roles)) {
+          // Remove role from mapped roles, because user does not have
+          // any of the allowed roles.
+          continue;
+        }
+      }
+
+      $role_mapping[] = $target_role;
+    }
+
+    $this->addMappedRoles($group_id, $role_mapping);
+  }
+
+  /**
+   * Add role mappings.
+   *
+   * @param $group_id
+   *   Group id.
+   * @param $mapped_roles
    *   Array of roles mapped to group.
    */
   public function addMappedRoles($group_id, $role_mapping) {
     if (empty($role_mapping)) {
       return;
     }
+
     if (isset($this->mappedRoles[$this->accountId][$group_id])) {
       $this->mappedRoles[$this->accountId][$group_id] = array_merge($this->mappedRoles[$this->accountId][$group_id], $this->groupRoleInheritanceManager->getRoles($role_mapping));
     }
@@ -264,23 +336,25 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
    * Get group inherited roles.
    *
    * @param int $group_id
-   *   Group od.
+   *   Group id.
    * @param array $roles
    *   Array of roles.
    */
-  public function getGroupNonMembersInheritedRoles($group_id, $roles = []) {
-    if (empty($roles)) {
-      return;
-    }
-
+  public function getGroupNonMembersInheritedRoles($group_id) {
     // Preload current group role map.
     $role_map = $this->groupRoleInheritanceManager->buildGroupRolesMap($group_id);
 
     foreach ($role_map as $mapped_group_id => $group_mappings) {
-      foreach ($group_mappings as $group_mapping) {
-        $role_mapping = array_intersect_key($group_mapping, $roles);
-        $this->addMappedRoles($mapped_group_id, $role_mapping);
+      // Skip current group.
+      if ($mapped_group_id == $group_id) {
+        continue;
       }
+
+      // We check mapping from parent to children.
+      $this->calculateMappedRoles($group_id, $mapped_group_id, $role_map);
+
+      // From children to parent
+      $this->calculateMappedRoles($group_id, $mapped_group_id, $role_map, FALSE);
     }
   }
 
@@ -288,49 +362,25 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
    * Get group inherited roles.
    *
    * @param int $group_id
-   *   Group od.
+   *   Group id.
    * @param array $roles
    *   Array of roles.
    */
-  public function getGroupMemberInheritedRoles($group_id, $roles = []) {
-    if (empty($roles)) {
-      return;
-    }
-
+  public function getGroupMemberInheritedRoles($group_id) {
     $role_map = $this->groupRoleInheritanceManager->buildGroupRolesMap($group_id);
 
-    // When we check super groups for member roles we want to be sure that we
-    // get role mapping for groups which using mapping
-    // "Map subgroup roles to group roles".
+    // Check supergroups.
     $super_subgroup_ids = $this->hierarchyManager->getGroupSupergroupIds($group_id);
-
     foreach ($super_subgroup_ids as $super_subgroup_id) {
-      if (empty($role_map[$super_subgroup_id])) {
-        continue;
-      }
-
-      $super_group_super_group_ids = $this->hierarchyManager->getGroupSupergroupIds($super_subgroup_id);
-      foreach ($role_map[$super_subgroup_id] as $mapped_group_id => $group_mappings) {
-        if (!in_array($mapped_group_id, $super_group_super_group_ids)) {
-          $role_mapping = array_intersect_key($group_mappings, $roles);
-          $this->addMappedRoles($super_subgroup_id, $role_mapping);
-        }
-      }
+      $this->calculateMappedRoles($group_id, $super_subgroup_id, $role_map);
+      $this->calculateMappedRoles($group_id, $super_subgroup_id, $role_map, FALSE);
     }
 
-    // When we check subgroups for member roles we want to check if any groups
-    // provide role mapping.
+    // Check subgroup.
     $subgroup_ids = $this->hierarchyManager->getGroupSubgroupIds($group_id);
-
     foreach ($subgroup_ids as $subgroup_id) {
-      if (empty($role_map[$subgroup_id] )) {
-        continue;
-      }
-
-      foreach ($role_map[$subgroup_id] as $group_mappings) {
-        $role_mapping = array_intersect_key($group_mappings, $roles);
-        $this->addMappedRoles($subgroup_id, $role_mapping);
-      }
+      $this->calculateMappedRoles($subgroup_id, $group_id, $role_map);
+      $this->calculateMappedRoles($subgroup_id, $group_id, $role_map, FALSE);
     }
   }
 

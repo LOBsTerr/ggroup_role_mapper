@@ -6,9 +6,11 @@ use Drupal\Core\Cache\Cache;
 use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Session\AccountInterface;
 use Drupal\ggroup\Graph\GroupGraphStorageInterface;
 use Drupal\ggroup\Plugin\Group\Relation\Subgroup;
 use Drupal\group\Entity\GroupTypeInterface;
+use Drupal\group\GroupMembershipLoader;
 
 /**
  * Provides all direct and indirect group relations and the inherited roles.
@@ -35,6 +37,13 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
    * @var \Drupal\Core\Database\Connection
    */
   protected $database;
+
+  /**
+   * The group membership loader.
+   *
+   * @var \Drupal\group\GroupMembershipLoader
+   */
+  protected $membershipLoader;
 
   /**
    * Static cache for the total role map.
@@ -116,6 +125,34 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
   protected $groups = [];
 
   /**
+   * Static cache for group user roles.
+   *
+   * @var array
+   */
+  protected $userRoles = NULL;
+
+  /**
+   * Static cache for group user outsider roles.
+   *
+   * @var array
+   */
+  protected $userOutsiderRoles = NULL;
+
+  /**
+   * User memberships.
+   *
+   * @var array
+   */
+  protected $userMemberships = NULL;
+
+  /**
+   * Intermediary groups.
+   *
+   * @var array
+   */
+  protected $intermediaryGroups = [];
+
+  /**
    * Constructs a new GroupHierarchyManager.
    *
    * @param \Drupal\ggroup\Graph\GroupGraphStorageInterface $group_graph_storage
@@ -126,12 +163,15 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
    *   The cache backend.
    * @param \Drupal\Core\Database\Connection $database
    *   The database.
+   * @param \Drupal\group\GroupMembershipLoader $membership_loader
+   *   The group membership loader.
    */
   public function __construct(
     GroupGraphStorageInterface $group_graph_storage,
     EntityTypeManagerInterface $entity_type_manager,
     CacheBackendInterface $cache,
-    Connection $database
+    Connection $database,
+    GroupMembershipLoader $membership_loader
   ) {
     $this->groupGraphStorage = $group_graph_storage;
     $this->groupTypeStorage = $entity_type_manager->getStorage('group_type');
@@ -139,6 +179,7 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     $this->groupRelationshipTypeStorage = $entity_type_manager->getStorage('group_relationship_type');
     $this->cache = $cache;
     $this->database = $database;
+    $this->membershipLoader = $membership_loader;
 
     // Preload group types.
     $this->getGroupTypes();
@@ -151,17 +192,17 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
    * {@inheritdoc}
    */
   public function buildGroupRolesMap($group_id) {
-//    if (!empty($this->roleMap[$group_id])) {
-//      return $this->roleMap[$group_id];
-//    }
+    if (!empty($this->roleMap[$group_id])) {
+      return $this->roleMap[$group_id];
+    }
 
     $cid = GroupRoleInheritanceInterface::ROLE_MAP_CID . ':' . $group_id;
 
-//    $cache = $this->cache->get($cid);
-//    if ($cache && $cache->valid) {
-//      $this->roleMap[$group_id] = $cache->data;
-//      return $this->roleMap[$group_id];
-//    }
+    $cache = $this->cache->get($cid);
+    if ($cache && $cache->valid) {
+      $this->roleMap[$group_id] = $cache->data;
+      return $this->roleMap[$group_id];
+    }
 
     $this->roleMap[$group_id] = $this->build($group_id);
 
@@ -210,8 +251,13 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
           // Get mapped roles for relation type. Filter array to remove
           // unmapped roles.
           if ($relation_config = $this->getPluginConfig($path_supergroup_id, $path_subgroup_id)) {
-            $path_role_map[$path_supergroup_id][$path_subgroup_id] = array_filter($relation_config['child_role_mapping']);
-            $path_role_map[$path_subgroup_id][$path_supergroup_id] = array_filter($relation_config['parent_role_mapping']);
+            if (is_array($relation_config['child_role_mapping'])) {
+              $path_role_map[$path_supergroup_id][$path_subgroup_id] = array_filter($relation_config['child_role_mapping']);
+            }
+
+            if (is_array($relation_config['parent_role_mapping'])) {
+              $path_role_map[$path_subgroup_id][$path_supergroup_id] = array_filter($relation_config['parent_role_mapping']);
+            }
           }
         }
         $role_map[] = $path_role_map;
@@ -237,35 +283,40 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
   protected function mapInterGroupTypeConnections(array $path, array $path_role_map) {
     $mapping = [];
 
-    foreach ($path as $current_group_id) {
-      if (empty($path_role_map[$current_group_id])) {
+    $count = count($path);
+    if ($count < 3) {
+      return $mapping;
+    }
+
+    for ($i = 0; $i <= $count - 3; $i++) {
+
+      $current_group_id = $path[$i];
+      $subgroup_id = $path[$i + 1];
+      $sub_subgroup_id = $path[$i + 2];
+
+      // We only intersection between different types
+      if ($this->getGroupTypeId($current_group_id) == $this->getGroupTypeId($subgroup_id)
+        && $this->getGroupTypeId($subgroup_id) == $this->getGroupTypeId($sub_subgroup_id)
+        && $this->getGroupTypeId($current_group_id) == $this->getGroupTypeId($sub_subgroup_id)
+      ) {
         continue;
       }
 
-      foreach ($path_role_map[$current_group_id] as $roles) {
-        foreach ($roles as $role => $target_role) {
-          foreach ($path as $subgroup_id) {
-            if ($subgroup_id === $current_group_id) {
-              continue;
-            }
-
-            if (empty($path_role_map[$subgroup_id])) {
-              continue;
-            }
-
-            foreach ($path_role_map[$subgroup_id] as $subgroup_roles) {
-              foreach ($subgroup_roles as $subgroup_role => $subgroup_target_role) {
-                if ($role === $subgroup_target_role) {
-                  $mapping[$subgroup_id][$current_group_id][$subgroup_role] = $target_role;
-                }
-              }
-            }
+      foreach ($path_role_map[$current_group_id][$subgroup_id] as $role => $target_role) {
+        foreach ($path_role_map[$subgroup_id][$sub_subgroup_id] as $subgroup_role => $subgroup_target_role) {
+          if ($role == $subgroup_target_role) {
+            $this->intermediaryGroups[$current_group_id][$sub_subgroup_id] = $subgroup_id;
+            $mapping[$sub_subgroup_id][$current_group_id][$subgroup_role] = $target_role;
           }
         }
       }
     }
 
     return $mapping;
+  }
+
+  public function getIntermediaryGroup($group_id, $subgroup_id) {
+    return $this->intermediaryGroups[$group_id][$subgroup_id] ?? NULL;
   }
 
   /**
@@ -321,6 +372,7 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
         }
       }
     }
+
     return $indirect_role_map;
   }
 
@@ -383,6 +435,7 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     }
 
     $group_types = $this->groupTypeStorage->loadMultiple();
+    // Load also roles, config and add cache tags.
     foreach ($group_types as $group_type) {
       $this->groupTypes[$group_type->id()] = $group_type;
       $this->getGroupTypeRoles($group_type);
@@ -390,7 +443,6 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     }
 
     return $this->groupTypes;
-
   }
 
   /**
@@ -428,7 +480,17 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     $this->groupTypeCacheTags[$group_type_id] = $cache_tags;
   }
 
-  protected function getPluginConfig($group_id, $subgroup_id) {
+  /**
+   * Get configuration between two group types of give groups, if any.
+   *
+   * @param int $group_id
+   *   Group id.
+   * @param int $subgroup_id
+   *   Subgroup id.
+   * @return mixed|null
+   *   Configuration
+   */
+  public function getPluginConfig($group_id, $subgroup_id) {
     return $this->groupTypePluginConfig[$this->getGroupTypeId($group_id)][$this->getGroupTypeId($subgroup_id)] ?? NULL;
   }
 
@@ -441,14 +503,14 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
   protected function getGroupTypeRoles(GroupTypeInterface $group_type) {
     $group_type_id = $group_type->id();
     // We store staticly all roles, because we need them anyway.
-    foreach ($group_type->getRoles() as $id => $role) {
-      $this->groupTypeRoles[$id] = $role;
+    foreach ($group_type->getRoles() as $role_id => $role) {
+      $this->groupTypeRoles[$role_id] = $role;
       if ($role->isAnonymous()) {
-        $this->groupTypeAnonymousRoles[$group_type_id][$id] = $role;
+        $this->groupTypeAnonymousRoles[$group_type_id][$role_id] = $role_id;
       }
 
       if ($role->isOutsider()) {
-        $this->groupTypeOutsiderRoles[$group_type_id][$id] = $role;
+        $this->groupTypeOutsiderRoles[$group_type_id][$role_id] = $role_id;
       }
     }
   }
@@ -470,11 +532,10 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
       }
 
       $roles[$role_id] = $this->groupTypeRoles[$role_id];
-
     }
+
     return $roles;
   }
-
 
   /**
    * Load all groups.
@@ -496,7 +557,6 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     return $this->groups;
   }
 
-
   /**
    * Get group type id by group id.
    *
@@ -506,8 +566,67 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
    * @return mixed|null
    *   Group type id.
    */
-  protected function getGroupTypeId($group_id) {
+  public function getGroupTypeId($group_id) {
     return $this->groups[$group_id] ?? NULL;
+  }
+
+  /**
+   * Get all available memberships.
+   *
+   * @param \Drupal\Core\Session\AccountInterface $account
+   *   User.
+   *
+   * @return array
+   *   Array of groups and their roles.
+   */
+  public function getMemberships(AccountInterface $account) {
+    if (!is_array($this->userMemberships)) {
+      $this->userMemberships = [];
+      $group_memberships = $this->membershipLoader->loadByUser($account);
+      foreach ($group_memberships as $group_membership) {
+        $this->userMemberships[$group_membership->getGroup()->id()] = array_keys($group_membership->getRoles());
+      }
+    }
+
+    return $this->userMemberships;
+  }
+
+  public function getGroupMemberships($group_id) {
+    return $this->userMemberships[$group_id] ?? [];
+  }
+
+  public function getUserGroupRoles(AccountInterface $account, $group_id) {
+    if (!isset($this->userRoles[$group_id])) {
+      $this->getMemberships($account);
+      $this->userRoles[$group_id] = [];
+      if (isset($this->userMemberships[$group_id])) {
+        // Get membership roles.
+        $this->userRoles[$group_id] = $this->userMemberships[$group_id];
+      }
+      else {
+        // Get outsider roles.
+        $group_type_id = $this->getGroupTypeId($group_id);
+        if ($account->isAnonymous() ) {
+          $this->userRoles[$group_id] = $this->getAnonymousRoles($group_type_id);
+        }
+        else {
+          if (!isset($this->userOutsiderRoles[$group_type_id])) {
+            $this->userOutsiderRoles[$group_type_id] = [];
+            $outsider_roles = $this->getRoles($this->getOutsiderRoles($group_type_id));
+            $user_roles = $account->getRoles();
+            foreach ($outsider_roles as $role) {
+              if (in_array($role->getGlobalRoleId(), $user_roles)) {
+                $this->userOutsiderRoles[$group_type_id][$role->id()] = $role->id();
+              }
+            }
+          }
+
+          $this->userRoles[$group_id] = $this->userOutsiderRoles[$group_type_id];
+        }
+      }
+    }
+
+    return $this->userRoles[$group_id];
   }
 
 }

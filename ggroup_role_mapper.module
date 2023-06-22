@@ -59,8 +59,10 @@ function ggroup_role_mapper_form_group_relationship_type_edit_form_alter (
 function _ggroup_role_mapper_mapping_form(&$form, $plugin_id, $group_type_id, $subgroup_type_id) {
 
   // We handle only subgroup plugins.
-  $group_type = GroupType::load($group_type_id);
-  $sub_group_type = GroupType::load($subgroup_type_id);
+  $group_types = GroupType::loadMultiple();
+  $group_type = $group_types[$group_type_id];
+  $sub_group_type = $group_types[$subgroup_type_id];
+
   $collection = \Drupal::service('group_relation_type.manager')->getInstalled($group_type);
   $configuration = $collection->getConfiguration();
 
@@ -70,41 +72,103 @@ function _ggroup_role_mapper_mapping_form(&$form, $plugin_id, $group_type_id, $s
   $parent_roles = $group_type->getRoles();
   $parent_options = [];
   foreach ($parent_roles as $role_id => $role) {
-    $parent_options[$role_id] = $role->label();
+    $parent_options[$role_id] = $role->label() . ' (' . $role_id . ')';
   }
 
   $child_roles = $sub_group_type->getRoles();
   $child_options = [];
   foreach ($child_roles as $role_id => $role) {
-    $child_options[$role_id] = $role->label();
+    $child_options[$role_id] = $role->label() . ' (' . $role_id . ')';
   }
 
-  $form['parent_role_mapping'] = [
+  $group_types_options = [];
+  foreach ($group_types as $group_type) {
+    foreach ($group_type->getRoles() as $role_id => $role) {
+      $group_types_options[$group_type->label()][$role_id] = $role->label() . ' (' . $role_id . ')';
+    }
+  }
+
+  $none_string = t('- None -');
+  $container_with_tree_options = [
+    '#type' => 'container',
+    '#tree' => TRUE,
+  ];
+
+  $form['parent_mapping'] = [
     '#type' => 'fieldset',
     '#title' => t('Map group roles to subgroup roles to allow group membership and permissions to be inherited by the subgroup.'),
-    '#tree' => TRUE,
   ];
+
   foreach ($parent_options as $role_id => $role_name) {
-    $form['parent_role_mapping'][$role_id] = [
-      '#type' => 'select',
+    $parent_container_id = "role_container_{$role_id}";
+
+    $form['parent_mapping'][$parent_container_id] = [
+      '#type' => 'fieldset',
       '#title' => $role_name,
+    ];
+    $form['parent_mapping'][$parent_container_id]['parent_role_mapping'] = $container_with_tree_options;
+    $form['parent_mapping'][$parent_container_id]['parent_role_mapping'][$role_id] = [
+      '#type' => 'select',
+      '#title' => t('Parent target role'),
       '#options' => $child_options,
-      '#empty_option' => t('- None -'),
+      '#empty_option' => $none_string,
       '#default_value' => $configuration[$plugin_id]['parent_role_mapping'][$role_id] ?? NULL,
     ];
+    $form['parent_mapping'][$parent_container_id]['parent_target_roles'] = $container_with_tree_options;
+    $form['parent_mapping'][$parent_container_id]['parent_target_roles'][$role_id] = [
+      '#type' => 'select',
+      '#title' => 'Target roles',
+      '#options' => $group_types_options,
+      '#empty_option' => $none_string,
+      '#multiple' => TRUE,
+      '#default_value' => $configuration[$plugin_id]['parent_target_roles'][$role_id] ?? [],
+      '#states' => [
+        'visible' => [
+          ':input[name="parent_role_mapping[' . $role_id . ']"]' => ['!value' => ''],
+        ],
+        'disabled' => [
+          ':input[name="parent_role_mapping[' . $role_id . ']"]' => ['value' => ''],
+        ],
+      ],
+    ];
   }
-  $form['child_role_mapping'] = [
+
+  $form['child_mapping'] = [
     '#type' => 'fieldset',
     '#title' => t('Map subgroup roles to group roles to allow subgroup membership and permissions to be propagated to the group.'),
-    '#tree' => TRUE,
   ];
+
   foreach ($child_options as $role_id => $role_name) {
-    $form['child_role_mapping'][$role_id] = [
-      '#type' => 'select',
+    $child_container_id = "child_container_{$role_id}";
+
+    $form['child_mapping'][$child_container_id] = [
+      '#type' => 'fieldset',
       '#title' => $role_name,
+    ];
+    $form['child_mapping'][$child_container_id]['child_role_mapping'] = $container_with_tree_options;
+    $form['child_mapping'][$child_container_id]['child_role_mapping'][$role_id] = [
+      '#type' => 'select',
+      '#title' => 'Child target role',
       '#options' => $parent_options,
-      '#empty_option' => t('- None -'),
+      '#empty_option' => $none_string,
       '#default_value' => $configuration[$plugin_id]['child_role_mapping'][$role_id] ?? NULL,
+    ];
+    $form['child_mapping'][$child_container_id]['child_target_roles'] = $container_with_tree_options;
+    $form['child_mapping'][$child_container_id]['child_target_roles'][$role_id] = [
+      '#type' => 'select',
+      '#title' => t('Target roles'),
+      '#options' => $group_types_options,
+      '#empty_option' => $none_string,
+      '#multiple' => TRUE,
+      '#default_value' => $configuration[$plugin_id]['child_target_roles'][$role_id] ?? [],
+      '#states' => [
+        'visible' => [
+          ':input[name="child_role_mapping[' . $role_id . ']"]' => ['!value' => ''],
+        ],
+        'disabled' => [
+          ':input[name="child_role_mapping[' . $role_id . ']"]' => ['value' => ''],
+        ],
+      ],
     ];
   }
 }
