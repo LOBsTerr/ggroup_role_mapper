@@ -147,7 +147,7 @@ class InheritGroupPermissionCalculator extends PermissionCalculatorBase {
   public function addGroupTypeTags($group_type_id) {
     // Add cache tags according to invalidate the cache when the subgroups hierarchy changes.
     if (empty($this->processedGroupTypes[$group_type_id])) {
-      $this->calculatedPermissions->addCacheTags($this->groupRoleInheritanceManager->getGroupTypeCacheTags($group_type_id));
+      $this->calculatedPermissions->addCacheTags($this->groupRoleInheritanceManager->getGroupTypeCacheTags());
       $this->processedGroupTypes[$group_type_id] = $group_type_id;
     }
   }

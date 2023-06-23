@@ -206,7 +206,7 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
 
     $this->roleMap[$group_id] = $this->build($group_id);
 
-    $cache_tags = $this->getGroupTypeCacheTags($this->getGroupTypeId($group_id));
+    $cache_tags = $this->getGroupTypeCacheTags();
     $cache_tags[] = "group:$group_id";
 
     $this->cache->set($cid, $this->roleMap[$group_id], Cache::PERMANENT, $cache_tags);
@@ -454,8 +454,8 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
    * @return array
    *   List of tags.
    */
-  public function getGroupTypeCacheTags($group_type_id) {
-    return $this->groupTypeCacheTags[$group_type_id] ?? [];
+  public function getGroupTypeCacheTags() {
+    return $this->groupTypeCacheTags;
   }
 
   /**
@@ -465,19 +465,17 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
    *   Group type.
    */
   protected function addGroupTypeInfo(GroupTypeInterface $group_type) {
-    $cache_tags = [];
     $group_type_id = $group_type->id();
     $plugins = $group_type->getInstalledPlugins();
     foreach ($plugins as $plugin) {
       if ($plugin instanceof Subgroup) {
         $relation_type_id = $this->groupRelationshipTypeStorage->getRelationshipTypeId($group_type_id, $plugin->getPluginId());
         $this->groupTypePluginConfig[$group_type->id()][$plugin->getPluginDefinition()->getEntityBundle()] = $plugin->getConfiguration();
-        $cache_tags[] = "config:group.relationship_type.$relation_type_id";
-        $cache_tags[] = "group_relationship_list:$relation_type_id";
+
+        $this->groupTypeCacheTags[] = "config:group.relationship_type.$relation_type_id";
+        $this->groupTypeCacheTags[] = "group_relationship_list:$relation_type_id";
       }
     }
-
-    $this->groupTypeCacheTags[$group_type_id] = $cache_tags;
   }
 
   /**
@@ -528,10 +526,14 @@ class GroupRoleInheritance implements GroupRoleInheritanceInterface {
     $roles = [];
     foreach ($roles_id as $role_id) {
       if (!isset($this->groupTypeRoles[$role_id])) {
-        $this->groupTypeRoles[$role_id] = $this->groupRoleStorage->load($role_id);
+        $role = $this->groupRoleStorage->load($role_id);
+        if (!empty($role)) {
+          $this->groupTypeRoles[$role_id] = $role;
+        }
       }
-
-      $roles[$role_id] = $this->groupTypeRoles[$role_id];
+      else {
+        $roles[$role_id] = $this->groupTypeRoles[$role_id];
+      }
     }
 
     return $roles;
